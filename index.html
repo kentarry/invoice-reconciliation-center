@@ -1,0 +1,1382 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kano 模型問卷設計工具</title>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- React -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<!-- Babel for JSX -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- Recharts -->
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<!-- Lucide Icons -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<!-- XLSX -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<!-- html2canvas -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<!-- docx -->
+<script src="https://unpkg.com/docx@7.8.2/build/index.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Noto Sans TC', sans-serif; }
+  .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  @keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in-down { animation: fadeInDown 0.3s ease; }
+  textarea { font-family: 'Noto Sans TC', monospace; }
+  .github-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .github-modal { background: white; border-radius: 16px; width: 100%; max-width: 520px; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+</head>
+<body class="bg-slate-50">
+<div id="root" style="height:100vh;display:flex;flex-direction:column;"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+const {
+  ComposedChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine, Line
+} = Recharts;
+
+// ===================== 常數定義 =====================
+const SYSTEM_PROMPT_V12 = `# Role Definition
+你是一位講話直白、重視落地執行的資深產品經理 (PM)。你討厭空泛的理論，擅長給出「明天就能執行」的具體建議。
+
+# 核心任務
+使用者將提供產品描述。請完成：
+1. **題目設計**：產出 10 組 Kano 問卷題目。
+2. **策略顧問**：針對每一題，根據其功能特性，預先撰寫「執行建議」與「修改方式」。
+3. **判讀指南**：根據生成的 10 組題目，撰寫「專屬情境 AMIOR 判讀指南」。⚠️ 禁止使用通用定義，必須結合題目情境。
+   **重要規則**：AMIOR 屬性判斷必須**單一且明確** (例如 "A 魅力品質")，**絕對禁止**出現 "A/O" 或 "M/R" 這類模糊寫法。
+
+# 寫作風格 (Style Guide)
+1. **白話文**：像同事在討論一樣，不要用教科書語氣。
+2. **拒絕廢話**：不要說「這很重要所以要優化」，要說「把讀取時間壓在 2 秒內，不然玩家會直接關掉」。
+3. **情境化**：
+   - ❌ 錯誤：建議提升使用者體驗，增加滿意度。
+   - ✅ 正確：針對「登入驗證碼」，建議增加「一鍵貼上」功能，減少輸入錯誤帶來的暴躁感。
+4. **具體行動**：
+   - ❌ 錯誤：優化介面設計。
+   - ✅ 正確：將確認按鈕加大 20% 並改為顯眼的橘色 (#FF5722)，以防手指粗的使用者誤觸取消。
+
+# Output JSON Structure (Strict)
+請務必只回傳以下 JSON 格式，不要包含 Markdown 語法或任何其他文字：
+{
+  "questions": [
+    {
+      "id": 1,
+      "feature": "功能簡述",
+      "amior": "預測屬性 (A/O/M/I/R)",
+      "categoryName": "屬性名稱",
+      "reason": "屬性判斷理由...",
+      "positive": "正向問句...",
+      "negative": "反向問句...",
+      "execution_advice": "【針對該功能的白話建議】",
+      "modification_method": "【具體執行步驟】\\n1. 第一步做什麼\\n2. 第二步做什麼"
+    }
+  ],
+  "guide": {
+    "positive_analysis": [
+       { "response": "我非常喜歡", "category": "A 魅力品質", "reason": "..." },
+       { "response": "我期望如此", "category": "O 期望品質", "reason": "..." },
+       { "response": "無所謂", "category": "I 無感品質", "reason": "..." },
+       { "response": "可以接受", "category": "M 基本品質", "reason": "..." },
+       { "response": "無法接受", "category": "R 反向品質", "reason": "..." }
+    ],
+    "negative_analysis": [
+       { "response": "我非常喜歡", "category": "R 反向品質", "reason": "..." },
+       { "response": "我期望如此", "category": "R 反向品質", "reason": "..." },
+       { "response": "無所謂", "category": "A 魅力品質", "reason": "..." },
+       { "response": "可以接受", "category": "O 期望品質", "reason": "..." },
+       { "response": "無法接受", "category": "M 基本品質", "reason": "..." }
+    ]
+  }
+}`;
+
+const KANO_MATRIX = {
+  '我非常喜歡': { '我非常喜歡': 'Q', '我期望如此': 'A', '無所謂': 'A', '可以接受': 'A', '無法接受': 'O' },
+  '我期望如此': { '我非常喜歡': 'R', '我期望如此': 'I', '無所謂': 'I', '可以接受': 'I', '無法接受': 'M' },
+  '無所謂': { '我非常喜歡': 'R', '我期望如此': 'I', '無所謂': 'I', '可以接受': 'I', '無法接受': 'M' },
+  '可以接受': { '我非常喜歡': 'R', '我期望如此': 'I', '無所謂': 'I', '可以接受': 'I', '無法接受': 'M' },
+  '無法接受': { '我非常喜歡': 'R', '我期望如此': 'R', '無所謂': 'R', '可以接受': 'R', '無法接受': 'Q' },
+};
+
+const CATEGORY_COLORS = { A: '#3B82F6', O: '#F97316', M: '#EF4444', I: '#64748B', R: '#10B981', Q: '#8B5CF6' };
+const LINE_COLORS = { A: '#93C5FD', O: '#FDBA74', M: '#FCA5A5', I: '#94A3B8', R: '#86EFAC' };
+const CATEGORY_NAMES = { A: '魅力屬性 (Attractive)', O: '期望屬性 (One-dimensional)', M: '基本屬性 (Must-be)', I: '無差異屬性 (Indifferent)', R: '反向屬性 (Reverse)', Q: '疑問結果 (Questionable)' };
+const SHORT_NAMES = { A: '魅力 (A)', O: '期望 (O)', M: '基本 (M)', I: '無差異 (I)', R: '反向 (R)', Q: '疑問 (Q)' };
+
+const DEFAULT_GUIDE = {
+  positive_analysis: [
+    { response: "我非常喜歡", category: "A 魅力品質", reason: "理由：超越預期，創造愉悅與驚喜。" },
+    { response: "我期望如此", category: "O 期望品質", reason: "理由：好的產品理應具備，多多益善。" },
+    { response: "無所謂", category: "I 無感品質", reason: "理由：非核心體驗，不在意是否存在。" },
+    { response: "可以接受", category: "M 基本品質", reason: "理由：基礎功能，有是應該的。" },
+    { response: "無法接受", category: "R 反向品質", reason: "理由：設計本身具有干擾性。" }
+  ],
+  negative_analysis: [
+    { response: "我非常喜歡", category: "R 反向品質", reason: "理由：若喜歡「沒有」，代表原設計干擾體驗。" },
+    { response: "我期望如此", category: "R 反向品質", reason: "理由：期望「沒有」，顯示功能可能是累贅。" },
+    { response: "無所謂", category: "A 魅力品質", reason: "理由：沒有也無所謂，代表僅是加分項。" },
+    { response: "可以接受", category: "O 期望品質", reason: "理由：勉強接受沒有，代表屬於期望範疇。" },
+    { response: "無法接受", category: "M 基本品質", reason: "理由：絕對不能接受沒有，這是基礎門檻。" }
+  ]
+};
+
+const DEMO_DATA = {
+  meta: { totalRespondents: 150, expectedQuestions: 5, analysisDate: new Date().toISOString().split('T')[0] },
+  items: [
+    { id: "Q1", text: "角色施法時的華麗粒子特效", isPos: true, displayId: "Q1", si: 0.72, dsi: -0.15, category: "A", stats: { A: 90, O: 10, M: 5, I: 45, R: 0, Q: 0 }, answerCounts: { '我非常喜歡': 90, '我期望如此': 10, '無所謂': 45, '可以接受': 5, '無法接受': 0 } },
+    { id: "Q2", text: "遊戲讀取時間小於 3 秒", isPos: true, displayId: "Q2", si: 0.80, dsi: -0.75, category: "O", stats: { A: 20, O: 100, M: 20, I: 10, R: 0, Q: 0 }, answerCounts: { '我非常喜歡': 20, '我期望如此': 100, '無所謂': 10, '可以接受': 20, '無法接受': 0 } },
+    { id: "Q3", text: "斷線後自動重連功能", isPos: true, displayId: "Q3", si: 0.25, dsi: -0.85, category: "M", stats: { A: 5, O: 20, M: 100, I: 25, R: 0, Q: 0 }, answerCounts: { '我非常喜歡': 5, '我期望如此': 20, '無所謂': 25, '可以接受': 0, '無法接受': 100 } },
+    { id: "Q4", text: "每日登入領取少量金幣", isPos: true, displayId: "Q4", si: 0.13, dsi: -0.13, category: "I", stats: { A: 10, O: 10, M: 10, I: 100, R: 20, Q: 0 }, answerCounts: { '我非常喜歡': 10, '我期望如此': 10, '無所謂': 100, '可以接受': 10, '無法接受': 20 } },
+    { id: "Q5", text: "深色模式 (Dark Mode)", isPos: true, displayId: "Q5", si: 0.65, dsi: -0.35, category: "A", stats: { A: 60, O: 30, M: 10, I: 50, R: 0, Q: 0 }, answerCounts: { '我非常喜歡': 60, '我期望如此': 30, '無所謂': 50, '可以接受': 10, '無法接受': 0 } }
+  ]
+};
+
+const RAW_CURVE_DATA = [
+  { x: 0, m: 0, o: 0, a: 0.5, i: 0.5, r: 1 }, { x: -0.1, m: 0.095, o: 0.1, a: 0.505, i: 0.5, r: 0.9 },
+  { x: -0.2, m: 0.18, o: 0.2, a: 0.52, i: 0.5, r: 0.8 }, { x: -0.3, m: 0.255, o: 0.3, a: 0.545, i: 0.5, r: 0.7 },
+  { x: -0.4, m: 0.32, o: 0.4, a: 0.58, i: 0.5, r: 0.6 }, { x: -0.5, m: 0.375, o: 0.5, a: 0.625, i: 0.5, r: 0.5 },
+  { x: -0.6, m: 0.42, o: 0.6, a: 0.68, i: 0.5, r: 0.4 }, { x: -0.7, m: 0.455, o: 0.7, a: 0.745, i: 0.5, r: 0.3 },
+  { x: -0.8, m: 0.48, o: 0.8, a: 0.82, i: 0.5, r: 0.2 }, { x: -0.9, m: 0.495, o: 0.9, a: 0.905, i: 0.5, r: 0.1 },
+  { x: -1, m: 0.5, o: 1, a: 1, i: 0.5, r: 0 },
+];
+
+// ===================== 工具函式 =====================
+const callGeminiAPI = async (payload, apiKey) => {
+  if (!apiKey || !apiKey.trim()) throw new Error("請先輸入有效的 Gemini API Key。");
+  let delay = 1000;
+  for (let i = 0; i < 5; i++) {
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (response.ok) return await response.json();
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData?.error?.message || `狀態碼 ${response.status}`;
+      if (response.status >= 400 && response.status < 500) throw new Error(`API 請求錯誤: ${errorMessage}`);
+      throw new Error(`伺服器暫時無回應: ${errorMessage}`);
+    } catch (e) {
+      if (e.message.includes("API 請求錯誤")) throw e;
+      if (i === 4) throw e;
+    }
+    await new Promise(res => setTimeout(res, delay));
+    delay *= 2;
+  }
+  throw new Error("無法連線至 AI 伺服器，請確認網路狀態或稍後再試。");
+};
+
+const normalizeAnswer = (raw) => {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  if (s.includes('無法') || s.includes('不喜歡') || s.includes('討厭')) return '無法接受';
+  if (s.includes('喜歡')) return '我非常喜歡';
+  if (s.includes('期望') || s.includes('理所當然') || s.includes('應該') || s.includes('當然')) return '我期望如此';
+  if (s.includes('無所謂') || s.includes('沒差') || s.includes('無感')) return '無所謂';
+  if (s.includes('接受') || s.includes('可以') || s.includes('忍受')) return '可以接受';
+  return s;
+};
+
+const extractFeatureName = (rawText) => {
+  if (!rawText) return '未命名功能';
+  let text = String(rawText).trim().replace(/^[Qq]?\d+[\.:_：]?\s*/, '');
+  const stripPrefixes = ['如果', '若能', '假如', '當您', '當', '關於', '針對', '對於', '請問您對', '您覺得', '是否', '具備', '提供', '擁有', '包含', '設計', '系統能', '遊戲能', '希望能', '想要'];
+  let clean = text, hasPrefix = true;
+  while(hasPrefix) { hasPrefix = false; for(const p of stripPrefixes) { if (clean.startsWith(p)) { clean = clean.substring(p.length).trim(); hasPrefix = true; } } }
+  const stripSuffixes = ['，您的感受是？', '，您覺得如何？', '，您的看法是？', '的感受是？', '您覺得如何？', '您的感受？', '？', '?', '...', '。', '呢？', '好嗎？', '可以嗎？'];
+  for (const s of stripSuffixes) { if (clean.endsWith(s)) clean = clean.substring(0, clean.length - s.length).trim(); }
+  const separators = ['，', ',', '：', ':', '影響', '導致', '造成'];
+  for (const sep of separators) { if (clean.includes(sep)) { clean = clean.split(sep)[0].trim(); break; } }
+  return clean.replace(/[\(\)（）]/g, '');
+};
+
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.readAsDataURL(file);
+  reader.onload = () => resolve(reader.result.split(',')[1]);
+  reader.onerror = reject;
+});
+
+const getQuadrantCategory = (si, dsi, center = { x: -0.5, y: 0.5 }) => {
+  if (si >= center.y && dsi >= center.x) return 'A';
+  if (si >= center.y && dsi < center.x) return 'O';
+  if (si < center.y && dsi >= center.x) return 'I';
+  return 'M';
+};
+
+// ===================== GitHub 同步功能 =====================
+const GitHubSyncModal = ({ onClose, htmlContent, showNotification }) => {
+  const [token, setToken] = useState(() => { try { return localStorage.getItem('github_token') || ''; } catch(e) { return ''; } });
+  const [repoName, setRepoName] = useState('kano-survey-tool');
+  const [description, setDescription] = useState('Kano 模型問卷設計工具');
+  const [isPublic, setIsPublic] = useState(false);
+  const [step, setStep] = useState('input'); // input | pushing | done | error
+  const [repoUrl, setRepoUrl] = useState('');
+  const [pageUrl, setPageUrl] = useState('');
+  const [log, setLog] = useState([]);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const addLog = (msg) => setLog(prev => [...prev, msg]);
+
+  const handleSync = async () => {
+    if (!token.trim()) { showNotification('請輸入 GitHub Personal Access Token', 'error'); return; }
+    if (!repoName.trim()) { showNotification('請輸入 Repo 名稱', 'error'); return; }
+
+    try { localStorage.setItem('github_token', token); } catch(e) {}
+
+    setStep('pushing');
+    setLog([]);
+
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json'
+    };
+
+    try {
+      // 1. 取得使用者資訊
+      addLog('🔍 正在驗證 GitHub 身份...');
+      const userRes = await fetch('https://api.github.com/user', { headers });
+      if (!userRes.ok) throw new Error('Token 無效或已過期，請重新產生');
+      const user = await userRes.json();
+      addLog(`✅ 身份驗證成功：@${user.login}`);
+
+      // 2. 建立新 Repo
+      addLog(`📦 正在建立 Repo "${repoName}"...`);
+      const createRes = await fetch('https://api.github.com/user/repos', {
+        method: 'POST', headers,
+        body: JSON.stringify({ name: repoName, description, private: !isPublic, auto_init: true })
+      });
+      
+      if (createRes.status === 422) {
+        // Repo 已存在，繼續使用
+        addLog(`⚠️ Repo "${repoName}" 已存在，將直接更新內容...`);
+      } else if (!createRes.ok) {
+        const errData = await createRes.json().catch(() => ({}));
+        throw new Error(`建立 Repo 失敗：${errData.message || createRes.status}`);
+      } else {
+        addLog(`✅ Repo 建立成功！`);
+      }
+
+      // 3. 取得現有 index.html 的 SHA（若存在）
+      addLog('📄 正在準備上傳 index.html...');
+      let existingSha = null;
+      const getFileRes = await fetch(`https://api.github.com/repos/${user.login}/${repoName}/contents/index.html`, { headers });
+      if (getFileRes.ok) {
+        const fileData = await getFileRes.json();
+        existingSha = fileData.sha;
+        addLog('🔄 偵測到既有檔案，將執行覆蓋更新...');
+      }
+
+      // 4. 上傳 index.html
+      const content = btoa(unescape(encodeURIComponent(htmlContent)));
+      const putBody = {
+        message: `🚀 更新 Kano 工具 - ${new Date().toLocaleString('zh-TW')}`,
+        content,
+        ...(existingSha ? { sha: existingSha } : {})
+      };
+      const putRes = await fetch(`https://api.github.com/repos/${user.login}/${repoName}/contents/index.html`, {
+        method: 'PUT', headers, body: JSON.stringify(putBody)
+      });
+      if (!putRes.ok) {
+        const errData = await putRes.json().catch(() => ({}));
+        throw new Error(`上傳檔案失敗：${errData.message || putRes.status}`);
+      }
+      addLog('✅ index.html 上傳成功！');
+
+      // 5. 啟用 GitHub Pages（使用 main branch / root）
+      addLog('🌐 正在啟用 GitHub Pages...');
+      const pagesRes = await fetch(`https://api.github.com/repos/${user.login}/${repoName}/pages`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ source: { branch: 'main', path: '/' } })
+      });
+      if (pagesRes.ok || pagesRes.status === 409) {
+        // 409 = Pages 已啟用
+        addLog('✅ GitHub Pages 已啟用！');
+      } else {
+        addLog('⚠️ GitHub Pages 啟用可能需要手動設定（Settings → Pages）');
+      }
+
+      const finalRepoUrl = `https://github.com/${user.login}/${repoName}`;
+      const finalPageUrl = `https://${user.login}.github.io/${repoName}/`;
+      setRepoUrl(finalRepoUrl);
+      setPageUrl(finalPageUrl);
+      addLog('');
+      addLog('🎉 同步完成！GitHub Pages 約需 1-2 分鐘生效。');
+      setStep('done');
+    } catch (err) {
+      setErrorMsg(err.message);
+      addLog(`❌ 錯誤：${err.message}`);
+      setStep('error');
+    }
+  };
+
+  return (
+    <div className="github-modal-overlay" onClick={onClose}>
+      <div className="github-modal" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="bg-gray-900 p-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            <div>
+              <div className="text-white font-bold text-base">上傳至 GitHub</div>
+              <div className="text-gray-400 text-xs">自動建立 Repo + 啟用 GitHub Pages</div>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white transition p-1">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto custom-scrollbar">
+          {step === 'input' && (
+            <>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                <strong>⚠️ 安全提醒：</strong>請使用僅有 <code>repo</code> 權限的 Personal Access Token（Classic）。Token 只會存在您的瀏覽器本機，不會傳送至任何第三方。
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  GitHub Personal Access Token <span className="text-red-500">*必填</span>
+                </label>
+                <div className="text-xs text-slate-500 mb-2">
+                  前往 GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+                </div>
+                <input
+                  type="password"
+                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-gray-800 focus:outline-none"
+                  placeholder="ghp_xxxxxxxxxxxx"
+                  value={token}
+                  onChange={e => setToken(e.target.value)}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Repo 名稱 <span className="text-red-500">*</span></label>
+                  <input
+                    type="text"
+                    className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-gray-800 focus:outline-none"
+                    placeholder="kano-survey-tool"
+                    value={repoName}
+                    onChange={e => setRepoName(e.target.value.replace(/[^a-zA-Z0-9\-_.]/g, ''))}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">可見度</label>
+                  <select
+                    className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-gray-800 focus:outline-none bg-white"
+                    value={isPublic ? 'public' : 'private'}
+                    onChange={e => setIsPublic(e.target.value === 'public')}
+                  >
+                    <option value="public">Public（可使用 Pages）</option>
+                    <option value="private">Private（需 Pro 帳號才能用 Pages）</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Repo 描述</label>
+                <input
+                  type="text"
+                  className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-gray-800 focus:outline-none"
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                />
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600 space-y-1">
+                <div className="font-bold text-slate-700 mb-1">執行步驟：</div>
+                <div>1️⃣ 驗證 Token 身份</div>
+                <div>2️⃣ 建立 GitHub Repo（若已存在則直接更新）</div>
+                <div>3️⃣ 上傳 index.html（本工具完整版）</div>
+                <div>4️⃣ 啟用 GitHub Pages 並取得網址</div>
+              </div>
+
+              <button
+                onClick={handleSync}
+                className="w-full py-3 bg-gray-900 hover:bg-gray-700 text-white rounded-lg font-bold text-sm transition flex items-center justify-center gap-2"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+                開始同步至 GitHub
+              </button>
+            </>
+          )}
+
+          {step === 'pushing' && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-5 h-5 border-2 border-gray-800 border-t-transparent rounded-full animate-spin"></div>
+                <span className="font-bold text-slate-800">正在同步中，請稍候...</span>
+              </div>
+              <div className="bg-gray-900 rounded-lg p-4 font-mono text-xs text-green-400 min-h-[120px] space-y-1">
+                {log.map((l, i) => <div key={i}>{l}</div>)}
+              </div>
+            </div>
+          )}
+
+          {step === 'done' && (
+            <div className="space-y-4">
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+                <div className="text-3xl mb-2">🎉</div>
+                <div className="font-bold text-green-800 text-lg mb-1">同步成功！</div>
+                <div className="text-green-700 text-sm">GitHub Pages 約需 1-2 分鐘生效</div>
+              </div>
+              <div className="bg-gray-900 rounded-lg p-4 font-mono text-xs text-green-400 space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
+                {log.map((l, i) => <div key={i}>{l}</div>)}
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <div className="text-xs font-bold text-slate-600 mb-1">📦 GitHub Repo</div>
+                  <a href={repoUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-sm font-mono break-all">{repoUrl}</a>
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-600 mb-1">🌐 GitHub Pages 網址（1-2分鐘後生效）</div>
+                  <a href={pageUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-sm font-mono break-all">{pageUrl}</a>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => window.open(repoUrl, '_blank')} className="py-2 bg-gray-900 text-white rounded-lg text-sm font-bold hover:bg-gray-700 transition">查看 Repo</button>
+                <button onClick={() => window.open(pageUrl, '_blank')} className="py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition">開啟 Pages</button>
+              </div>
+              <button onClick={() => setStep('input')} className="w-full py-2 bg-slate-100 text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-200 transition">再次更新</button>
+            </div>
+          )}
+
+          {step === 'error' && (
+            <div className="space-y-4">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center">
+                <div className="text-3xl mb-2">❌</div>
+                <div className="font-bold text-red-800 text-lg mb-1">同步失敗</div>
+                <div className="text-red-700 text-sm">{errorMsg}</div>
+              </div>
+              <div className="bg-gray-900 rounded-lg p-4 font-mono text-xs text-red-400 space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
+                {log.map((l, i) => <div key={i}>{l}</div>)}
+              </div>
+              <button onClick={() => setStep('input')} className="w-full py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-700 transition">返回重試</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ===================== 子元件 =====================
+const NotificationToast = ({ message, type, onClose }) => {
+  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
+  const bgClass = type === 'error' ? 'bg-red-500' : type === 'success' ? 'bg-green-500' : 'bg-blue-500';
+  const Icon = type === 'error' ? '⚠️' : type === 'success' ? '✅' : 'ℹ️';
+  return (
+    <div className={`fixed top-4 right-4 z-[10000] ${bgClass} text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 animate-fade-in-down max-w-sm`}>
+      <span>{Icon}</span>
+      <p className="text-sm font-medium">{message}</p>
+      <button onClick={onClose} className="ml-auto hover:bg-white/20 rounded-full p-1 text-xs">✕</button>
+    </div>
+  );
+};
+
+const CustomScatterPoint = (props) => {
+  const { cx, cy, payload } = props;
+  if (!payload) return null;
+  const category = getQuadrantCategory(payload.si, payload.dsi);
+  const color = CATEGORY_COLORS[category] || CATEGORY_COLORS['I'];
+  const { lx, ax, ly, ay } = payload;
+  const SCALE = 400;
+  const xOffset = (lx - ax) * SCALE * -1;
+  const yOffset = (ly - ay) * SCALE * -1;
+  const finalX = cx + xOffset;
+  const finalY = cy + yOffset;
+  const dist = Math.sqrt(xOffset*xOffset + yOffset*yOffset);
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={5} fill={color} stroke="white" strokeWidth={1} />
+      {dist > 10 && <line x1={cx} y1={cy} x2={finalX} y2={finalY} stroke="#94a3b8" strokeWidth={1} opacity={0.6} />}
+      <text x={finalX} y={finalY} dy={4} fill="#0f172a" fontSize={11} fontWeight="bold" textAnchor="middle" style={{ textShadow: '0 0 3px white, 0 0 3px white' }}>{payload.id}</text>
+    </g>
+  );
+};
+
+const CustomTooltip = ({ active, payload }) => {
+  if (!active || !payload || !payload.length) return null;
+  const items = payload[0].payload.originalItems || [payload[0].payload];
+  return (
+    <div className="bg-white p-2 border border-slate-300 shadow-xl rounded text-xs z-[9999]">
+      {items.map((item, idx) => (
+        <div key={idx} className={idx > 0 ? "mt-2 pt-2 border-t" : ""}>
+          <span className="font-bold">{item.id}</span>
+          <span className="ml-2 px-1 rounded text-white" style={{backgroundColor: CATEGORY_COLORS[item.category]}}>{item.category}</span>
+          <p>{item.text}</p>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const AmiorStatsSummary = ({ amiorStats }) => {
+  if (!amiorStats) return null;
+  return (
+    <div className="p-4 bg-slate-50 rounded-lg border border-slate-100 flex flex-wrap gap-4 items-center mb-6">
+      <span className="font-bold text-sm text-slate-700">整體分佈：</span>
+      {Object.entries(amiorStats).filter(([,count]) => count > 0).map(([key, count]) => (
+        <div key={key} className="flex items-center gap-1.5">
+          <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[key] }}></div>
+          <span className="text-sm font-bold text-slate-700">{SHORT_NAMES[key]}: {count}題</span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const AmiorGuideSection = ({ guide }) => (
+  <div className="mt-8 border-t border-slate-200 pt-6">
+    <h4 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">💡 Kano 模型判讀指南</h4>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50 p-6 rounded-xl border border-slate-200 text-sm text-slate-700">
+      <div className="space-y-3">
+        <div className="font-bold text-slate-900 border-b pb-2 mb-2">正向題反應分析</div>
+        {guide.positive_analysis.map((row, idx) => (
+          <p key={idx}>{row.response} → <strong>（{row.category.split(' ')[0]}）</strong> <span className="text-slate-500 block text-xs mt-1">{String(row.reason)}</span></p>
+        ))}
+      </div>
+      <div className="space-y-3">
+        <div className="font-bold text-slate-900 border-b pb-2 mb-2">反向題反應分析</div>
+        {guide.negative_analysis.map((row, idx) => (
+          <p key={idx}>{row.response} → <strong>（{row.category.split(' ')[0]}）</strong> <span className="text-slate-500 block text-xs mt-1">{String(row.reason)}</span></p>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+const SharedKanoChart = ({ height = 500, chartData }) => (
+  <div className="kano-chart-visual" style={{width: '100%', height, position: 'relative', backgroundColor: '#fff'}}>
+    <div className="flex flex-wrap gap-4 justify-center mb-2 text-xs font-bold text-slate-600">
+      {[['M','基本'],['O','期望'],['A','魅力'],['I','無差異'],['R','反向']].map(([k,n]) => (
+        <div key={k} className="flex items-center gap-1">
+          <span className="w-8 h-1 rounded inline-block" style={{background: LINE_COLORS[k], ...(k==='R'?{borderBottom:'2px dashed '+LINE_COLORS[k],background:'none',height:'0'}:{})}}></span>
+          <span>{n} ({k})</span>
+        </div>
+      ))}
+    </div>
+    <div className="absolute inset-0 pointer-events-none flex flex-col pl-[50px] pr-[30px] pt-[20px] pb-[40px] z-0" style={{top:30}}>
+      <div className="flex-1 flex">
+        <div className="flex-1 flex items-center justify-center text-blue-500/20 font-bold text-2xl select-none">魅力屬性 (Attractive)</div>
+        <div className="flex-1 flex items-center justify-center text-orange-500/20 font-bold text-2xl select-none">期望屬性 (One-dimensional)</div>
+      </div>
+      <div className="flex-1 flex">
+        <div className="flex-1 flex items-center justify-center text-slate-700/20 font-bold text-2xl select-none">無差異屬性 (Indifferent)</div>
+        <div className="flex-1 flex items-center justify-center text-red-500/20 font-bold text-2xl select-none">基本屬性 (Must-be)</div>
+      </div>
+    </div>
+    <ResponsiveContainer width="100%" height="90%">
+      <ComposedChart margin={{ top: 20, right: 30, bottom: 20, left: 50 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis type="number" dataKey="x" domain={[-1, 0]} reversed label={{ value: '不滿意係數 (DSI)', position: 'bottom', offset: 0, fill: '#64748b', fontSize: 12 }} stroke="#94a3b8" fontSize={11} />
+        <YAxis type="number" dataKey="y" domain={[0, 1]} label={{ value: '滿意係數 (SI)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 12 }} stroke="#94a3b8" fontSize={11} />
+        <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3' }} wrapperStyle={{ zIndex: 9999 }} />
+        {['m','o','a','i'].map(k => <Line key={k} data={RAW_CURVE_DATA} dataKey={k} type="monotone" stroke={LINE_COLORS[k.toUpperCase()]} strokeWidth={2} dot={false} isAnimationActive={false} />)}
+        <Line data={RAW_CURVE_DATA} dataKey="r" type="monotone" stroke={LINE_COLORS.R} strokeWidth={2} strokeDasharray="5 5" dot={false} isAnimationActive={false} />
+        <ReferenceLine x={-0.5} stroke="#94a3b8" strokeDasharray="5 5" strokeWidth={1} />
+        <ReferenceLine y={0.5} stroke="#94a3b8" strokeDasharray="5 5" strokeWidth={1} />
+        <Scatter data={chartData} isAnimationActive={false} shape={<CustomScatterPoint />} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  </div>
+);
+
+const StageSection = ({ stage, children }) => {
+  const configs = {
+    1: { borderColor: 'border-red-200', headerBg: 'bg-red-50', title: '搞定基礎體驗', sub: '針對基本品質 (M)', icon: '🛡️', badge: '第一階段：優先止血', badgeBg: 'bg-red-200', badgeText: 'text-red-800' },
+    2: { borderColor: 'border-amber-200', headerBg: 'bg-amber-50', title: '創造亮點與爽感', sub: '針對期望/魅力 (O & A)', icon: '⚡', badge: '第二階段：體驗升級', badgeBg: 'bg-amber-200', badgeText: 'text-amber-800' },
+    3: { borderColor: 'border-emerald-200', headerBg: 'bg-emerald-50', title: '避免無效開發', sub: '針對無差異 (I)', icon: '✂️', badge: '第三階段：資源節流', badgeBg: 'bg-emerald-200', badgeText: 'text-emerald-800' },
+  };
+  const c = configs[stage];
+  return (
+    <div className={`mb-10 w-full rounded-xl border-2 ${c.borderColor} overflow-hidden bg-white shadow-sm`}>
+      <div className={`p-6 border-b ${c.borderColor} ${c.headerBg} relative`}>
+        <div className="absolute right-6 top-6 text-3xl p-2 rounded-full bg-white/50">{c.icon}</div>
+        <div className={`inline-block px-3 py-1 ${c.badgeBg} ${c.badgeText} text-xs font-bold rounded-full mb-2`}>{c.badge}</div>
+        <h2 className="text-2xl font-bold text-slate-800 mb-1">{c.title}</h2>
+        <p className="text-slate-600 text-sm">{c.sub}</p>
+      </div>
+      <div className="p-6 bg-slate-50/30 space-y-6">{children}</div>
+    </div>
+  );
+};
+
+const SuggestionCard = ({ group }) => {
+  const item = group.items[0];
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow p-4">
+      <div className="flex items-center gap-3">
+        <span className="bg-slate-800 text-white px-2 py-0.5 rounded text-xs font-bold shrink-0">{item.id}</span>
+        <span className="text-white px-2 py-0.5 rounded text-xs shrink-0" style={{backgroundColor: CATEGORY_COLORS[item.category]}}>{SHORT_NAMES[item.category]}</span>
+        <h3 className="text-base font-bold text-slate-800 leading-snug">{item.text}</h3>
+      </div>
+    </div>
+  );
+};
+
+const QuestionStatsTable = ({ items }) => {
+  const half = Math.ceil(items.length / 2);
+  const leftItems = items.slice(0, half);
+  const rightItems = items.slice(half);
+  const renderItem = (item) => (
+    <div key={item.uniqueKey} className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg border border-slate-100 hover:bg-white hover:shadow-sm transition-all">
+      <span className="bg-slate-200 text-slate-700 px-2 py-1 rounded text-xs font-bold min-w-[36px] text-center shrink-0">{item.displayId}</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-white px-2 py-0.5 rounded text-[10px] font-bold" style={{backgroundColor: CATEGORY_COLORS[item.category]}}>{SHORT_NAMES[item.category]}</span>
+        </div>
+        <p className="text-sm text-slate-700 leading-relaxed font-medium break-words">{item.text}</p>
+      </div>
+    </div>
+  );
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
+        <div className="space-y-2">{leftItems.map(renderItem)}</div>
+        <div className="space-y-2">{rightItems.map(renderItem)}</div>
+      </div>
+    </div>
+  );
+};
+
+// ===================== 題目產生器 =====================
+const KanoQuestionGenerator = ({ showNotification, generatorState, setGeneratorState, onOpenGitHub }) => {
+  const { apiKey = '', files = [], description = '', prompt = '', generatedQuestions = [], generatedGuide = null } = generatorState;
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [refineTarget, setRefineTarget] = useState("1");
+  const [refineInstruction, setRefineInstruction] = useState("");
+  const [isRefining, setIsRefining] = useState(false);
+  const [analyzingStep, setAnalyzingStep] = useState("");
+  const [showScreenshotModal, setShowScreenshotModal] = useState(false);
+  const projectInputRef = useRef(null);
+
+  const setField = (key, val) => setGeneratorState(prev => ({ ...prev, [key]: val }));
+
+  const handleFileChange = (e) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files).map(file => ({
+        id: Math.random().toString(36).substr(2, 9),
+        file, url: URL.createObjectURL(file),
+        type: file.type.startsWith('video') ? 'video' : 'image'
+      }));
+      setField('files', [...files, ...newFiles]);
+    }
+  };
+
+  const generateQuestions = async () => {
+    if (!apiKey.trim()) { showNotification('請先輸入 Gemini API Key', 'error'); return; }
+    if (!description.trim() && files.length === 0) { showNotification('請輸入描述或上傳圖片/影片', 'error'); return; }
+    setIsGenerating(true);
+    setAnalyzingStep("分析內容中 (呼叫 AI)...");
+    try {
+      let payload;
+      if (files.length > 0) {
+        const parts = [{ text: `[System Instruction]\n${prompt}\n\n[User Request]\n${description || '請根據提供的圖片/影片生成題目。'}` }];
+        for (const f of files) {
+          try { parts.push({ inlineData: { mimeType: f.file.type, data: await fileToBase64(f.file) } }); } catch(e) {}
+        }
+        payload = { contents: [{ role: "user", parts }] };
+      } else {
+        payload = { contents: [{ parts: [{ text: description }] }], systemInstruction: { parts: [{ text: prompt }] } };
+      }
+      const resultData = await callGeminiAPI(payload, apiKey);
+      const text = resultData.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("AI 無回應");
+      let parsed = {};
+      const clean = text.replace(/```json\n?/ig, '').replace(/```\n?/g, '').trim();
+      try { parsed = JSON.parse(clean); } catch(e) {
+        const m = clean.match(/\{[\s\S]*\}/);
+        if (m) parsed = JSON.parse(m[0]); else throw new Error("AI 回傳格式錯誤");
+      }
+      const newQs = Array.isArray(parsed) ? parsed : (parsed.questions || []);
+      setGeneratorState(prev => ({ ...prev, generatedQuestions: newQs, generatedGuide: parsed.guide || null }));
+      showNotification(`成功生成 ${newQs.length} 組題目！`, 'success');
+    } catch(err) {
+      showNotification(`生成失敗：${err.message}`, 'error');
+    } finally { setIsGenerating(false); setAnalyzingStep(""); }
+  };
+
+  const handleRefineQuestion = async () => {
+    if (!apiKey.trim()) { showNotification('請先輸入 Gemini API Key', 'error'); return; }
+    if (!refineInstruction.trim()) { showNotification('請輸入優化需求', 'error'); return; }
+    setIsRefining(true);
+    try {
+      const isAll = refineTarget === 'ALL';
+      const standardResponses = JSON.stringify(['我非常喜歡', '我期望如此', '無所謂', '可以接受', '無法接受']);
+      const guidePrompt = `\n2. 根據新題目組合，重新撰寫「Kano 模型判讀指南」(Guide)，必須包含 positive_analysis 和 negative_analysis，各含以下5個回答：${standardResponses}。`;
+      let sysPrompt = isAll
+        ? `# Role\n你是資深產品經理。\n# Task\n根據使用者需求修改所有題目。${guidePrompt}\n# 現有題目\n${JSON.stringify(generatedQuestions)}\n# Output\n回傳 {"questions": [...], "guide": {...}}`
+        : `# Role\n你是資深產品經理。\n# Task\n修改指定題目 ID=${refineTarget}。${guidePrompt}\n# 目標題目\n${JSON.stringify(generatedQuestions.find(q=>String(q.id)===String(refineTarget)))}\n# 所有題目\n${JSON.stringify(generatedQuestions)}\n# Output\n回傳 {"refinedQuestion": {...}, "guide": {...}}`;
+      const payload = { contents: [{ parts: [{ text: `修改需求：${refineInstruction}` }] }], systemInstruction: { parts: [{ text: sysPrompt }] } };
+      const resultData = await callGeminiAPI(payload, apiKey);
+      const text = resultData.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("AI 無回應");
+      let result = {};
+      const clean = text.replace(/```json\n?/ig, '').replace(/```\n?/g, '').trim();
+      try { result = JSON.parse(clean); } catch(e) { const m = clean.match(/\{[\s\S]*\}/); if (m) result = JSON.parse(m[0]); else throw new Error("格式錯誤"); }
+      
+      const finalGuide = (result.guide && Array.isArray(result.guide.positive_analysis) && result.guide.positive_analysis.length === 5) ? result.guide : (generatedGuide || DEFAULT_GUIDE);
+      
+      if (isAll) {
+        setGeneratorState(prev => ({ ...prev, generatedQuestions: result.questions, generatedGuide: finalGuide }));
+        showNotification('全體題目優化完成！', 'success');
+      } else {
+        const idx = generatedQuestions.findIndex(q => String(q.id) === String(refineTarget));
+        if (idx !== -1 && result.refinedQuestion) {
+          const newQs = [...generatedQuestions];
+          result.refinedQuestion.id = generatedQuestions[idx].id;
+          newQs[idx] = result.refinedQuestion;
+          setGeneratorState(prev => ({ ...prev, generatedQuestions: newQs, generatedGuide: finalGuide }));
+          showNotification(`題目 ${refineTarget} 優化完成！`, 'success');
+        }
+      }
+      setRefineInstruction("");
+    } catch(err) {
+      showNotification(`優化失敗：${err.message}`, 'error');
+    } finally { setIsRefining(false); }
+  };
+
+  const saveProject = () => {
+    const blob = new Blob([JSON.stringify({ description, prompt, generatedQuestions, generatedGuide, timestamp: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `Kano_Project_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    showNotification('專案儲存成功', 'success');
+  };
+
+  const loadProject = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = JSON.parse(evt.target.result);
+        setGeneratorState(prev => ({ ...prev, description: data.description || '', prompt: data.prompt || SYSTEM_PROMPT_V12, generatedQuestions: data.generatedQuestions || [], generatedGuide: data.generatedGuide || null }));
+        showNotification('專案讀取成功！', 'success');
+      } catch { showNotification('讀取失敗：格式錯誤', 'error'); }
+    };
+    reader.readAsText(file);
+  };
+
+  const exportToExcel = () => {
+    if (generatedQuestions.length === 0) { showNotification('無題目可匯出', 'error'); return; }
+    if (!window.XLSX) { showNotification('Excel 元件尚未載入，請稍後', 'error'); return; }
+    const wb = window.XLSX.utils.book_new();
+    const ws1 = window.XLSX.utils.aoa_to_sheet([["題組","功能情境","AMIOR","理由","正向問句","反向問句"], ...generatedQuestions.map(q => [q.id, q.feature, `${q.amior}(${q.categoryName})`, q.reason, q.positive, q.negative])]);
+    window.XLSX.utils.book_append_sheet(wb, ws1, "題目設計總覽");
+    window.XLSX.writeFile(wb, `Kano_Questions_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showNotification('Excel 匯出成功！', 'success');
+  };
+
+  const exportToWord = async () => {
+    if (generatedQuestions.length === 0) { showNotification('無題目可匯出', 'error'); return; }
+    if (!window.docx) { showNotification('Word 套件尚未載入', 'error'); return; }
+    const { Document, Packer, Paragraph } = window.docx;
+    const children = [];
+    let n = 1;
+    generatedQuestions.forEach(q => {
+      children.push(new Paragraph({ text: `${n}. ${q.positive} *` }));
+      ['A. 我非常喜歡','B. 我期望如此','C. 無所謂','D. 可以接受','E. 無法接受'].forEach(opt => children.push(new Paragraph({ text: opt })));
+      children.push(new Paragraph({ text: "" }));
+      n++;
+      children.push(new Paragraph({ text: `${n}. ${q.negative} *` }));
+      ['A. 我非常喜歡','B. 我期望如此','C. 無所謂','D. 可以接受','E. 無法接受'].forEach(opt => children.push(new Paragraph({ text: opt })));
+      children.push(new Paragraph({ text: "" }));
+      n++;
+    });
+    const blob = await Packer.toBlob(new Document({ sections: [{ children }] }));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `Kano_Survey_Forms_${new Date().toISOString().split('T')[0]}.docx`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    showNotification('Word 匯出成功！', 'success');
+  };
+
+  const amiorStats = useMemo(() => {
+    const counts = { A: 0, O: 0, M: 0, I: 0, R: 0 };
+    generatedQuestions.forEach(q => { if (counts[q.amior] !== undefined) counts[q.amior]++; });
+    return counts;
+  }, [generatedQuestions]);
+
+  const guide = generatedGuide || DEFAULT_GUIDE;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col lg:flex-row gap-6">
+        {/* 左側：素材上傳 */}
+        <div className="flex-1 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
+          <h3 className="font-bold mb-3 flex items-center gap-2 text-slate-800 text-sm">🖼️ 1. 上傳素材 (圖片/影片)</h3>
+          <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center hover:bg-slate-50 transition relative mb-4">
+            <input type="file" multiple onChange={handleFileChange} accept="image/*,video/*" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <div className="flex flex-col items-center gap-1">
+              <div className="p-2 bg-blue-50 rounded-full text-blue-500">📤</div>
+              <p className="text-xs font-medium text-slate-600">點擊或拖曳上傳多個檔案</p>
+            </div>
+          </div>
+          {files.length > 0 && (
+            <div className="flex gap-2 mb-4 overflow-x-auto pb-2 h-24 custom-scrollbar">
+              {files.map(file => (
+                <div key={file.id} className="relative group w-24 h-20 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
+                  {file.type === 'video' ? <video src={file.url} className="w-full h-full object-cover" /> : <img src={file.url} alt="預覽" className="w-full h-full object-cover" />}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                    <button onClick={() => setField('files', files.filter(f => f.id !== file.id))} className="p-1.5 bg-red-500 text-white rounded-full">🗑</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <h3 className="font-bold mb-2 flex items-center gap-2 text-slate-800 text-sm mt-2">ℹ️ 2. 內容描述 (關鍵)</h3>
+          <textarea className="w-full border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none h-32 resize-none" placeholder="請描述產品玩法、介面大綱..." value={description} onChange={e => setField('description', e.target.value)} />
+        </div>
+
+        {/* 右側：AI 設定 */}
+        <div className="lg:w-[480px] bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
+          <h3 className="font-bold mb-3 flex items-center gap-2 text-slate-800 text-sm">🪄 3. AI 題目生成設定</h3>
+          
+          <div className="flex gap-2 mb-4">
+            <button onClick={saveProject} className="flex-1 bg-slate-100 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-200 flex items-center justify-center gap-1 border border-slate-200">💾 儲存專案</button>
+            <div className="flex-1 relative">
+              <input type="file" ref={projectInputRef} onChange={loadProject} accept=".json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+              <button className="w-full h-full bg-slate-100 text-slate-600 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-200 flex items-center justify-center gap-1 border border-slate-200">📂 讀取專案</button>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="text-xs font-bold text-slate-700 block mb-2">🔑 Gemini API Key <span className="text-red-500 ml-auto float-right">*必填</span></label>
+            <input
+              type="password"
+              className="w-full border border-slate-300 bg-slate-50 text-slate-700 rounded-lg p-2 text-xs focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              placeholder="請輸入 Google Gemini API Key"
+              value={apiKey}
+              onChange={e => {
+                const val = e.target.value;
+                setGeneratorState(prev => ({ ...prev, apiKey: val }));
+                try { localStorage.setItem('gemini_api_key', val); } catch(e) {}
+              }}
+            />
+          </div>
+
+          <div className="mb-4 flex-1 flex flex-col min-h-0">
+            <label className="text-xs font-bold text-slate-700 block mb-2">定義提詞 (Prompt)</label>
+            <textarea className="w-full border border-slate-300 bg-slate-50 text-slate-500 rounded-lg p-3 text-xs focus:ring-2 focus:ring-purple-500 focus:outline-none flex-1 resize-none" style={{minHeight:'120px'}} value={prompt} onChange={e => setField('prompt', e.target.value)} />
+          </div>
+
+          <button onClick={generateQuestions} disabled={isGenerating} className={`w-full py-3 rounded-lg font-bold text-white shadow-sm flex items-center justify-center gap-2 transition ${isGenerating ? 'bg-slate-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:opacity-90'}`}>
+            {isGenerating ? (analyzingStep || "分析中...") : "⚡ 根據內容生成題目"}
+          </button>
+        </div>
+      </div>
+
+      {/* 生成結果 */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+        <div className="flex justify-between items-center mb-4 border-b pb-4">
+          <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">📊 生成結果預覽</h3>
+          {generatedQuestions.length > 0 && (
+            <div className="flex gap-2 flex-wrap justify-end">
+              <button onClick={exportToExcel} className="text-sm bg-green-100 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-200 font-bold flex items-center gap-1 transition">📥 匯出 Excel</button>
+              <button onClick={exportToWord} className="text-sm bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg hover:bg-indigo-200 font-bold flex items-center gap-1 transition">📄 匯出 Word</button>
+              <button onClick={() => setShowScreenshotModal(true)} className="text-sm bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200 font-bold flex items-center gap-1 transition">👁 題目總覽</button>
+              <button onClick={onOpenGitHub} className="text-sm bg-gray-900 text-white px-3 py-1.5 rounded-lg hover:bg-gray-700 font-bold flex items-center gap-1 transition">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+                同步 GitHub
+              </button>
+            </div>
+          )}
+        </div>
+
+        {generatedQuestions.length > 0 ? (
+          <div className="flex flex-col gap-6">
+            <AmiorStatsSummary amiorStats={amiorStats} />
+            <div className="space-y-4">
+              {generatedQuestions.flatMap((q, idx) => [
+                { ...q, type: 'positive', label: '正向題', text: q.positive, seqId: idx*2+1, badgeColor: 'bg-green-600' },
+                { ...q, type: 'negative', label: '反向題', text: q.negative, seqId: idx*2+2, badgeColor: 'bg-red-600' }
+              ]).map(item => (
+                <div key={`${item.id}-${item.type}`} onClick={() => setRefineTarget(String(item.id))} className={`p-5 rounded-xl border transition-all cursor-pointer relative ${String(refineTarget) === String(item.id) ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'bg-slate-50 border-slate-200 hover:shadow-md'}`}>
+                  <div className="font-bold text-slate-800 mb-2 flex flex-wrap items-center gap-2">
+                    <span className={`px-2 py-0.5 rounded text-xs text-white ${item.badgeColor}`}>Q{item.seqId} {item.label}</span>
+                  </div>
+                  <p className="text-slate-900 text-base font-bold mb-2">{item.text}</p>
+                  <div className="text-sm text-slate-600 bg-slate-100 p-3 rounded-lg border border-slate-200 mt-2">
+                    <span className="font-extrabold text-blue-700">{String(item.amior)}</span>
+                    <span className="font-bold text-slate-700">（{String(item.categoryName)}）</span>：{String(item.reason)}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 優化區 */}
+            <div className="shrink-0 bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex flex-col md:flex-row gap-4 items-center">
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="p-2 bg-indigo-100 rounded-full">🔄</div>
+                <div><h4 className="font-bold text-indigo-900 text-sm">AI 題目優化</h4></div>
+              </div>
+              <div className="flex-1 flex gap-2 w-full items-center">
+                <div className="flex items-center gap-2">
+                  <div className={`px-3 py-2 rounded-lg text-sm font-bold whitespace-nowrap ${refineTarget === 'ALL' ? 'bg-purple-100 text-purple-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                    {refineTarget === 'ALL' ? '針對：全體題目' : `針對：題組 ${refineTarget}`}
+                  </div>
+                  <button onClick={() => setRefineTarget(prev => prev === 'ALL' ? "1" : 'ALL')} className="text-xs text-slate-500 underline hover:text-slate-700 whitespace-nowrap">
+                    {refineTarget === 'ALL' ? '改為單題' : '切換全體'}
+                  </button>
+                </div>
+                <input type="text" className="bg-white border border-indigo-200 text-gray-900 text-sm rounded-lg w-full p-2.5" placeholder="請輸入修改需求" value={refineInstruction} onChange={e => setRefineInstruction(e.target.value)} />
+              </div>
+              <button onClick={handleRefineQuestion} disabled={isRefining} className={`text-white bg-indigo-600 hover:bg-indigo-700 font-medium rounded-lg text-sm px-5 py-2.5 whitespace-nowrap ${isRefining ? 'opacity-70 cursor-wait' : ''}`}>
+                {isRefining ? '優化中...' : '重新生成'}
+              </button>
+            </div>
+
+            <AmiorGuideSection guide={guide} />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center text-slate-400 gap-4 py-16">
+            <span className="text-5xl opacity-20">🔍</span>
+            <p>請先在上方輸入描述並點擊生成</p>
+          </div>
+        )}
+      </div>
+
+      {/* 截圖模式 */}
+      {showScreenshotModal && (
+        <div className="fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowScreenshotModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-lg">題目設計總覽 (截圖模式)</h3>
+              <button onClick={() => setShowScreenshotModal(false)} className="p-2 hover:bg-slate-200 rounded-full">✕</button>
+            </div>
+            <div className="p-8 overflow-auto bg-white">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b-2 border-slate-800">
+                    <th className="p-3 font-bold w-16">編號</th>
+                    <th className="p-3 font-bold w-1/4">功能情境</th>
+                    <th className="p-3 font-bold">正向問句</th>
+                    <th className="p-3 font-bold">反向問句</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {generatedQuestions.map((q, idx) => (
+                    <tr key={idx} className="border-b border-slate-200">
+                      <td className="p-3 font-bold text-slate-700">{q.id}</td>
+                      <td className="p-3 text-slate-800 font-medium">{q.feature}</td>
+                      <td className="p-3 text-slate-600">{q.positive}</td>
+                      <td className="p-3 text-slate-600">{q.negative}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ===================== 問卷填寫預覽 =====================
+const SurveyPreview = ({ data, guide }) => {
+  const flatItems = useMemo(() => {
+    if (!data?.items) return [];
+    return [...data.items].sort((a,b) => (parseInt(a.id.replace(/\D/g,''))||0)-(parseInt(b.id.replace(/\D/g,''))||0)).map(item => ({
+      ...item, displayId: item.id, uniqueKey: item.id,
+      typeLabel: item.isPos ? '正向題' : '反向題',
+      badgeColor: item.isPos ? 'bg-green-100 text-green-700 border-green-200' : 'bg-red-100 text-red-700 border-red-200',
+    }));
+  }, [data]);
+
+  const amiorStats = useMemo(() => {
+    const counts = { A: 0, O: 0, M: 0, I: 0, R: 0 };
+    data?.items?.forEach(q => { if (counts[q.category] !== undefined) counts[q.category]++; });
+    return counts;
+  }, [data]);
+
+  if (!data?.items?.length) return (
+    <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-4 py-20">
+      <span className="text-6xl opacity-20">ℹ️</span>
+      <p>目前無數據，請先在「圖表看板」上傳 Excel 數據或使用範例數據。</p>
+    </div>
+  );
+
+  return (
+    <div className="max-w-4xl mx-auto py-8">
+      <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden mb-8">
+        <div className="bg-indigo-600 h-3 w-full"></div>
+        <div className="p-8 border-b border-slate-100">
+          <h1 className="text-3xl font-bold text-slate-900 mb-2">問卷填寫結果分析</h1>
+          <p className="text-slate-600">以下顯示從 Excel 解析出的所有題目及其統計結果。</p>
+        </div>
+      </div>
+      <div className="space-y-6">
+        <AmiorStatsSummary amiorStats={amiorStats} />
+        {flatItems.map(item => (
+          <div key={item.uniqueKey} className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 relative overflow-hidden">
+            <div className={`absolute left-0 top-0 bottom-0 w-1 ${item.isPos ? 'bg-green-500' : 'bg-red-500'}`}></div>
+            <div className="pl-2">
+              <div className="flex items-center gap-3 mb-3 justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="bg-slate-800 text-white px-3 py-1 rounded-lg text-sm font-bold">{item.displayId}</span>
+                  <span className={`px-2 py-1 rounded text-xs font-bold border ${item.badgeColor}`}>{item.typeLabel}</span>
+                </div>
+                <div className="flex gap-4 text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                  <span className="text-blue-600">SI: {item.si?.toFixed(3) || 'N/A'}</span>
+                  <span className="text-orange-600">DSI: {item.dsi?.toFixed(3) || 'N/A'}</span>
+                </div>
+              </div>
+              <h3 className="font-bold text-slate-800 text-lg leading-relaxed mb-3">{item.text}</h3>
+              {item.stats && (
+                <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
+                  <div className="flex flex-wrap gap-4 items-center">
+                    {['M','O','A','I','R'].map(key => (
+                      <div key={key} className="flex items-center gap-1.5">
+                        <div className="w-2.5 h-2.5 rounded-full" style={{backgroundColor: CATEGORY_COLORS[key]}}></div>
+                        <span className="text-sm font-bold text-slate-700">{key}: {item.stats[key]||0}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        <AmiorGuideSection guide={guide || DEFAULT_GUIDE} />
+      </div>
+    </div>
+  );
+};
+
+// ===================== 主應用程式 =====================
+const App = () => {
+  const [data, setData] = useState({ meta: { totalRespondents: 0, expectedQuestions: 0, analysisDate: new Date().toISOString().split('T')[0] }, items: [] });
+  const [viewMode, setViewMode] = useState('generator');
+  const [sortMode, setSortMode] = useState('id');
+  const [notification, setNotification] = useState(null);
+  const [showGitHubModal, setShowGitHubModal] = useState(false);
+  const [generatorState, setGeneratorState] = useState(() => {
+    let storedKey = '';
+    try { storedKey = localStorage.getItem('gemini_api_key') || ''; } catch(e) {}
+    return { apiKey: storedKey, files: [], description: '', prompt: SYSTEM_PROMPT_V12, generatedQuestions: [], generatedGuide: null };
+  });
+  const [reportTitle, setReportTitle] = useState('Kano 模型分析報告');
+  const [projectName, setProjectName] = useState('');
+  const [author, setAuthor] = useState('');
+  const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
+  const [summaryHighlights, setSummaryHighlights] = useState('');
+  const [analysisReason, setAnalysisReason] = useState('');
+  const [improvementItems, setImprovementItems] = useState([]);
+  const fileInputRef = useRef(null);
+  const reportRef = useRef(null);
+  const chartCenter = { x: -0.5, y: 0.5 };
+
+  const showNotification = (msg, type = 'info') => setNotification({ message: msg, type });
+  const guide = generatorState.generatedGuide || DEFAULT_GUIDE;
+
+  useEffect(() => { if (data?.items?.length > 0) generateAutoContent(data); }, [data]);
+
+  const loadDemoData = () => { setData(DEMO_DATA); showNotification('範例數據載入成功！', 'success'); };
+
+  const generateAutoContent = (currentData) => {
+    if (!currentData.items?.length) return;
+    const items = currentData.items;
+    const totalQ = items.length;
+    const count = { A: 0, O: 0, M: 0, I: 0, R: 0, Q: 0 };
+    items.forEach(i => { if (count[i.category] !== undefined) count[i.category]++; });
+    const pct = n => totalQ === 0 ? '0%' : `${Math.round((n/totalQ)*100)}%`;
+    const maxCat = Object.keys(count).reduce((a,b) => count[a] > count[b] ? a : b);
+    const mList = items.filter(i => i.category==='M').map(i=>i.id).join('、');
+    const oList = items.filter(i => i.category==='O').map(i=>i.id).join('、');
+    const aList = items.filter(i => i.category==='A').map(i=>i.id).join('、');
+    setSummaryHighlights(`1）分佈總覽：\n  本次分析共 ${totalQ} 題，以「${CATEGORY_NAMES[maxCat].split(' ')[0]}」佔比最高 (${count[maxCat]}題, ${pct(count[maxCat])})。\n\n2）關鍵屬性：\n  ・基本(M)：${mList||'無'}\n  ・期望(O)：${oList||'無'}\n  ・魅力(A)：${aList||'無'}\n\n3）優先行動：\n  ${count.M > 0 ? '基本需求(M)存在缺口，需最優先修復以止血。' : '基礎功能穩固，建議集中資源在期望需求(O)的體驗優化。'}`);
+    setAnalysisReason(count.M > totalQ*0.3 ? '1. 基礎建設期：\n超過 30% 為基本需求(M)，產品仍處於「補足基礎」階段。' : count.A > totalQ*0.3 ? '1. 創新紅利期：\n大量魅力需求(A)，具有很好的行銷潛力。' : '1. 體驗優化期：\n分佈均衡，戰場在於「做得比競品更好」。');
+    const sorted = [...items].sort((a,b) => { const p={M:1,O:2,A:2,I:3,R:3,Q:4}; const d=(p[a.category]||9)-(p[b.category]||9); return d!==0?d:Math.abs(b.dsi)-Math.abs(a.dsi); });
+    setImprovementItems(sorted);
+  };
+
+  const getSuggestion = (item) => {
+    const { category, dsi, si, text } = item;
+    const cleanText = extractFeatureName(text);
+    if (item.execution_advice && item.modification_method) {
+      return { stage: category==='M'?1:(category==='O'||category==='A')?2:3, title: `針對「${item.feature||cleanText}」的策略`, strategy: 'AI 專屬分析', desc: item.execution_advice, example: item.modification_method, displayTitle: text };
+    }
+    const stageMap = { M: { stage:1, title:`⛔ 核心阻礙`, advice:`這是基本門檻 (DSI: ${dsi.toFixed(2)})，做不好玩家會直接流失` }, O: { stage:2, title:`⚔️ 主要戰場`, advice:`這是提升滿意度的關鍵 (SI: ${si.toFixed(2)})，必須做得比競品更好` }, A: { stage:2, title:`✨ 產品賣點`, advice:`這是意料之外的驚喜 (SI: ${si.toFixed(2)})，值得投入行銷資源包裝` }, I: { stage:3, title:`📉 資源黑洞`, advice:`玩家對此無感，建議暫停開發投入` }, R: { stage:3, title:`⚠️ 反向干擾`, advice:`此設計造成負面體驗，請考慮移除或提供關閉選項` } };
+    const s = stageMap[category] || { stage:3, title:'❓ 需釐清', advice:'數據分佈不明確，建議直接訪談用戶' };
+    return { stage: s.stage, title: s.title, strategy: '建議', desc: s.advice, example: `請針對「${cleanText}」進行具體優化。`, displayTitle: text };
+  };
+
+  const groupedImprovementItems = useMemo(() => improvementItems.map(item => {
+    const s = getSuggestion(item);
+    return { stage: s.stage, title: s.title, desc: s.desc, example: s.example, displayTitle: s.displayTitle, idList: [item.id], items: [item], category: item.category };
+  }), [improvementItems]);
+
+  const activeStages = useMemo(() => [1,2,3].filter(s => groupedImprovementItems.some(g => g.stage===s)), [groupedImprovementItems]);
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    if (!window.XLSX) { showNotification('Excel 元件載入中，請稍後', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = window.XLSX.read(evt.target.result, { type: 'binary' });
+        const wsDataArray = window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+        if (!wsDataArray || wsDataArray.length < 2) { showNotification('Excel 無有效數據', 'error'); return; }
+        const headers = wsDataArray[0]; const dataRows = wsDataArray.slice(1);
+        const processedItems = [];
+        const START_COL_INDEX = 6;
+        let validQCount = 0;
+        const generatedList = generatorState.generatedQuestions || [];
+        const currentGuide = generatorState.generatedGuide || DEFAULT_GUIDE;
+        const guideLookup = { positive: {}, negative: {} };
+        const getCatCode = str => (str||'').split(' ')[0].trim().toUpperCase();
+        currentGuide.positive_analysis?.forEach(item => { guideLookup.positive[normalizeAnswer(item.response)] = getCatCode(item.category); });
+        currentGuide.negative_analysis?.forEach(item => { guideLookup.negative[normalizeAnswer(item.response)] = getCatCode(item.category); });
+
+        for (let i = START_COL_INDEX; i < headers.length; i++) {
+          const header = headers[i]; if (!header) continue;
+          const isNeg = validQCount % 2 !== 0;
+          let counts = { A: 0, M: 0, O: 0, I: 0, R: 0, Q: 0 }; let rawCounts = {};
+          dataRows.forEach(row => {
+            const ans = normalizeAnswer((row[i]||'').toString());
+            rawCounts[ans] = (rawCounts[ans]||0) + 1;
+            const cat = (!isNeg ? guideLookup.positive : guideLookup.negative)[ans];
+            if (cat && counts[cat] !== undefined) counts[cat]++;
+          });
+          const validTotal = counts.A+counts.O+counts.M+counts.I+counts.R;
+          const safeTotal = validTotal===0?1:validTotal;
+          const si = parseFloat(((counts.A+counts.O)/safeTotal).toFixed(3));
+          const dsi = parseFloat(((counts.O+counts.M)/safeTotal*-1).toFixed(3));
+          const calculatedCategory = getQuadrantCategory(si, dsi, chartCenter);
+          const linkedQ = generatedList.find(q => header.includes(q.feature)) || generatedList[validQCount];
+          processedItems.push({ id:`Q${validQCount+1}`, text:header, isPos:!isNeg, displayId:`Q${validQCount+1}`, si, dsi, category:calculatedCategory, stats:counts, answerCounts:rawCounts, execution_advice:linkedQ?.execution_advice||null, modification_method:linkedQ?.modification_method||null, feature:linkedQ?.feature||null });
+          validQCount++;
+        }
+        setData({ meta: { totalRespondents: dataRows.length, expectedQuestions: processedItems.length, analysisDate: new Date().toISOString().split('T')[0] }, items: processedItems });
+        showNotification(`解析完成！共處理 ${processedItems.length} 個題目`, 'success');
+      } catch(err) { showNotification('解析失敗：'+err.message, 'error'); }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const chartData = useMemo(() => {
+    if (!data.items.length) return [];
+    const groupedMap = new Map();
+    data.items.forEach(item => { const key = `${item.dsi.toFixed(4)}_${item.si.toFixed(4)}`; if (!groupedMap.has(key)) groupedMap.set(key, []); groupedMap.get(key).push(item); });
+    const nodes = Array.from(groupedMap.values()).map(items => {
+      const first = items[0];
+      const label = [...items].sort((a,b)=>(parseInt(a.displayId.replace(/\D/g,''))||0)-(parseInt(b.displayId.replace(/\D/g,''))||0)).map(i=>i.displayId).join('、');
+      return { ...first, id: label, originalItems: items, x: first.dsi, y: first.si, ax: first.dsi, ay: first.si, lx: first.dsi, ly: first.si, vx: 0, vy: 0 };
+    });
+    const ITERATIONS = nodes.length > 50 ? 40 : 120;
+    const anchors = nodes.map(n => ({x: n.ax, y: n.ay}));
+    for (let i = 0; i < ITERATIONS; i++) {
+      nodes.forEach(node => {
+        let fx = 0, fy = 0;
+        fx += (node.ax - node.lx) * 0.05; fy += (node.ay - node.ly) * 0.05;
+        nodes.forEach(other => { if (node===other) return; const dx=node.lx-other.lx, dy=node.ly-other.ly, d2=dx*dx+dy*dy; if (d2<0.0064&&d2>0) { const d=Math.sqrt(d2), f=(0.08-d)/d*0.005; fx+=dx*f; fy+=dy*f; } });
+        anchors.forEach(a => { const dx=node.lx-a.x, dy=node.ly-a.y, d2=dx*dx+dy*dy; if (d2<0.0025&&d2>0) { const d=Math.sqrt(d2), f=(0.05-d)/d*0.02; fx+=dx*f; fy+=dy*f; } });
+        if (node.lx<-0.98) fx+=0.01; if (node.lx>-0.02) fx-=0.01; if (node.ly<0.02) fy+=0.01; if (node.ly>0.98) fy-=0.01;
+        node.vx=(node.vx+fx)*0.9; node.vy=(node.vy+fy)*0.9; node.lx+=node.vx; node.ly+=node.vy;
+      });
+    }
+    return nodes.map(n => ({ ...n, labelX: n.lx, labelY: n.ly }));
+  }, [data.items]);
+
+  const sortedListItems = useMemo(() => {
+    let sorted = [...data.items];
+    if (sortMode==='id') sorted.sort((a,b)=>(parseInt(a.id.replace(/\D/g,''))||0)-(parseInt(b.id.replace(/\D/g,''))||0));
+    else { const order={A:1,O:2,M:3,I:4,R:5,Q:6}; sorted.sort((a,b)=>(order[a.category]||99)-(order[b.category]||99)); }
+    return sorted;
+  }, [data.items, sortMode]);
+
+  const dashboardFlatItems = useMemo(() => sortedListItems.map(item => ({ ...item, uniqueKey: item.id })), [sortedListItems]);
+
+  // 取得當前 HTML 內容供 GitHub 上傳
+  const getCurrentHTML = () => document.documentElement.outerHTML;
+
+  const handleExportHTML = async () => {
+    if (!data.items.length) { showNotification('無數據可匯出', 'error'); return; }
+    if (viewMode !== 'report') { showNotification('請先切換至「報告預覽」分頁後再執行匯出', 'warning'); setViewMode('report'); return; }
+    if (!reportRef.current) { showNotification('找不到報告元件', 'error'); return; }
+    showNotification('正在產生 HTML 報告...', 'info');
+    try {
+      let chartImageBase64 = '';
+      const chartEl = reportRef.current.querySelector('.kano-chart-visual');
+      if (chartEl && window.html2canvas) {
+        const canvas = await window.html2canvas(chartEl, { scale: 4, useCORS: true, logging: false, backgroundColor: '#ffffff' });
+        chartImageBase64 = canvas.toDataURL('image/png');
+      }
+      const htmlContent = `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><title>${reportTitle}</title><style>body{font-family:sans-serif;color:#334155;max-width:900px;margin:0 auto;padding:40px;background:#f8fafc;}h1{font-size:32px;border-bottom:2px solid #4f46e5;padding-bottom:16px;}h2{font-size:24px;margin-top:40px;border-left:4px solid #10b981;padding-left:12px;}.meta{display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:14px;color:#64748b;margin-bottom:40px;}img{max-width:100%;height:auto;border-radius:8px;}</style></head><body><h1>${reportTitle}</h1><div class="meta"><p><strong>專案：</strong>${projectName}</p><p><strong>製作人：</strong>${author}</p><p><strong>日期：</strong>${reportDate}</p><p><strong>樣本數：</strong>${data.meta.totalRespondents}</p></div><h2>Kano 屬性分佈圖</h2>${chartImageBase64?`<img src="${chartImageBase64}" />`:'<p>(圖表匯出失敗)</p>'}<h2>總結重點</h2><p style="white-space:pre-wrap;">${summaryHighlights}</p><h2>分析原因</h2><p style="white-space:pre-wrap;">${analysisReason}</p></body></html>`;
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `Report_Kano_${reportDate}.html`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      showNotification('HTML 匯出成功！', 'success');
+    } catch(e) { showNotification('匯出失敗：'+e.message, 'error'); }
+  };
+
+  const navTabs = [
+    { key: 'generator', label: '🪄 題目產生器' },
+    { key: 'dashboard', label: '📊 圖表看板' },
+    { key: 'survey', label: '✏️ 問卷填寫預覽' },
+    { key: 'report', label: '📋 報告預覽' },
+    { key: 'data', label: '🔌 API 數據' },
+  ];
+
+  return (
+    <div className="flex flex-col h-full bg-slate-50 font-sans text-slate-900 relative">
+      {notification && <NotificationToast message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
+      {showGitHubModal && <GitHubSyncModal onClose={() => setShowGitHubModal(false)} htmlContent={getCurrentHTML()} showNotification={showNotification} />}
+
+      {/* 導覽列 */}
+      <div className="bg-white border-b border-slate-200 px-4 py-3 flex justify-between items-center sticky top-0 z-50 shadow-sm">
+        <div className="flex gap-2 flex-wrap">
+          {navTabs.map(tab => (
+            <button key={tab.key} onClick={() => setViewMode(tab.key)} className={`px-4 py-2 rounded-lg text-sm font-bold transition ${viewMode===tab.key ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2 items-center">
+          {viewMode === 'report' && (
+            <button onClick={handleExportHTML} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold transition shadow-sm">
+              📄 匯出 HTML
+            </button>
+          )}
+          <button onClick={() => setShowGitHubModal(true)} className="flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white rounded-lg text-sm font-bold transition shadow-sm">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            同步 GitHub
+          </button>
+        </div>
+      </div>
+
+      {/* 主要內容 */}
+      <div className="flex-1 overflow-auto p-6 custom-scrollbar">
+        {viewMode === 'generator' && (
+          <KanoQuestionGenerator showNotification={showNotification} generatorState={generatorState} setGeneratorState={setGeneratorState} onOpenGitHub={() => setShowGitHubModal(true)} />
+        )}
+
+        {viewMode === 'survey' && <SurveyPreview data={data} guide={guide} />}
+
+        {viewMode === 'dashboard' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-1 space-y-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h3 className="font-bold mb-4 flex items-center gap-2">📤 數據來源</h3>
+                <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center hover:bg-slate-50 transition relative">
+                  <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx,.xls,.csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <div className="text-4xl mb-2 opacity-30">🗄</div>
+                  <p className="text-sm font-medium text-slate-600">更新數據 (上傳 Excel)</p>
+                  <p className="text-xs text-slate-400 mt-2">支援直接上傳 Sheet1 原始問卷檔</p>
+                </div>
+                <button onClick={loadDemoData} className="mt-3 w-full py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition">載入範例數據</button>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h3 className="font-bold mb-4 flex items-center gap-2">⚙️ 報告設定</h3>
+                <div className="space-y-4">
+                  {[['報告名稱', reportTitle, setReportTitle], ['專案名稱', projectName, setProjectName], ['製作人', author, setAuthor]].map(([label, val, setter]) => (
+                    <div key={label}>
+                      <label className="text-xs font-bold text-slate-500 block mb-1">{label}</label>
+                      <input type="text" value={val} onChange={e => setter(e.target.value)} className="w-full border rounded px-3 py-2 text-sm bg-slate-50" />
+                    </div>
+                  ))}
+                  <div><label className="text-xs font-bold text-slate-500 block mb-1">日期</label><input type="date" value={reportDate} onChange={e => setReportDate(e.target.value)} className="w-full border rounded px-3 py-2 text-sm bg-slate-50" /></div>
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div className="grid grid-cols-2 gap-4 text-center">
+                  <div className="p-4 bg-slate-50 rounded-xl"><div className="text-xs text-slate-500 font-bold">總樣本</div><div className="text-2xl font-bold">{data.meta.totalRespondents}</div></div>
+                  <div className="p-4 bg-slate-50 rounded-xl"><div className="text-xs text-slate-500 font-bold">題數</div><div className="text-2xl font-bold">{data.items.length}</div></div>
+                </div>
+              </div>
+            </div>
+            <div className="lg:col-span-2 flex flex-col gap-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 className="text-xl font-bold mb-4">Kano 模型分佈圖</h2>
+                <div className="h-[500px] w-full"><SharedKanoChart height={500} chartData={chartData} /></div>
+                <div className="mt-6 border-t pt-4">
+                  <div className="flex justify-between mb-2">
+                    <h3 className="font-bold text-sm">ℹ️ 題目詳細數據</h3>
+                    <select value={sortMode} onChange={e => setSortMode(e.target.value)} className="text-xs border rounded p-1 bg-slate-50">
+                      <option value="id">依照題號</option>
+                      <option value="category">依照屬性</option>
+                    </select>
+                  </div>
+                  <QuestionStatsTable items={dashboardFlatItems} />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {viewMode === 'report' && (
+          <div className="max-w-4xl mx-auto">
+            <div className="bg-white p-12 shadow-lg min-h-screen" ref={reportRef}>
+              <div className="border-b-2 border-indigo-600 pb-6 mb-12">
+                <h1 className="text-4xl font-bold text-slate-900 mb-4">{reportTitle}</h1>
+                <div className="grid grid-cols-2 gap-4 text-sm text-slate-600">
+                  <p><strong>專案：</strong> {projectName}</p>
+                  <p><strong>製作人：</strong> {author}</p>
+                  <p><strong>日期：</strong> {reportDate}</p>
+                  <p><strong>樣本數：</strong> {data.meta?.totalRespondents || 0}</p>
+                </div>
+              </div>
+              <div className="mb-16">
+                <h2 className="text-2xl font-bold text-slate-800 border-l-4 border-emerald-500 pl-4 mb-8">一、Kano 屬性分佈圖</h2>
+                <div className="h-[500px] w-full border border-slate-200 rounded-lg p-4"><SharedKanoChart height={460} chartData={chartData} /></div>
+              </div>
+              <div className="mb-16">
+                <h2 className="text-2xl font-bold text-slate-800 border-l-4 border-emerald-500 pl-4 mb-8">二、總結與分析</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border border-slate-200 rounded-lg overflow-hidden">
+                  <div className="p-6 bg-indigo-50 border-b md:border-b-0 md:border-r border-slate-200">
+                    <h3 className="font-bold text-indigo-900 mb-3">📊 總結重點</h3>
+                    <p className="text-slate-700 whitespace-pre-wrap leading-relaxed text-sm">{summaryHighlights || "尚無數據可分析。"}</p>
+                  </div>
+                  <div className="p-6 bg-white">
+                    <h3 className="font-bold text-indigo-900 mb-3">🧐 分析原因</h3>
+                    <p className="text-slate-700 whitespace-pre-wrap leading-relaxed text-sm">{analysisReason || "尚無數據可分析。"}</p>
+                  </div>
+                </div>
+              </div>
+              <div className="mb-16">
+                <h2 className="text-2xl font-bold text-slate-800 border-l-4 border-emerald-500 pl-4 mb-8">三、優化教戰守則</h2>
+                <div className="space-y-8">
+                  {activeStages.length > 0 ? activeStages.map(stage => (
+                    <StageSection key={stage} stage={stage}>
+                      {groupedImprovementItems.filter(g => g.stage===stage).map((g, idx) => <SuggestionCard key={idx} group={g} />)}
+                    </StageSection>
+                  )) : <p className="text-slate-400 italic pl-4">目前數據不足以生成優化建議。</p>}
+                </div>
+              </div>
+              <div className="text-center text-slate-400 text-sm border-t border-slate-100 pt-8">工具製作人：李敏瑞</div>
+            </div>
+          </div>
+        )}
+
+        {viewMode === 'data' && (
+          <div className="h-full bg-white rounded-2xl shadow p-4 flex flex-col min-h-[400px]">
+            <div className="flex justify-between mb-4"><span className="font-bold">API JSON 資料</span></div>
+            <textarea className="flex-1 bg-slate-900 text-green-400 font-mono p-4 rounded resize-none" style={{minHeight:'400px'}} value={JSON.stringify(data, null, 2)} readOnly />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
